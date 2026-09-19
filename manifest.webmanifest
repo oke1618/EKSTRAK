@@ -1,0 +1,18 @@
+{
+  "id": "./",
+  "name": "Ekstrak Laporan — Penjualan & Uang Masuk",
+  "short_name": "Ekstrak Laporan",
+  "description": "Aplikasi rekapitulasi dan rekonsiliasi data Penjualan serta Uang Masuk harian.",
+  "lang": "id",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#ffffff",
+  "theme_color": "#305496",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

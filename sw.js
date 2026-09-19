@@ -1,7 +1,7 @@
 /* Service Worker — Ekstrak Laporan
    Strategi: cache dulu (cepat & bisa offline), lalu diperbarui di latar belakang.
    Ubah CACHE_VERSION jika Anda menambah/mengganti file di daftar CORE. */
-const CACHE_VERSION = 'v1';
+const CACHE_VERSION = 'v2';
 const CACHE = 'ekstrak-laporan-' + CACHE_VERSION;
 
 const CORE = [
@@ -25,7 +25,8 @@ const CDN_HOSTS = ['cdn.jsdelivr.net'];
 self.addEventListener('install', (event) => {
   event.waitUntil((async () => {
     const cache = await caches.open(CACHE);
-    await cache.addAll(CORE);
+    // cache:'reload' = ambil versi terbaru dari server, bukan dari cache HTTP browser
+    await cache.addAll(CORE.map(u => new Request(u, { cache: 'reload' })));
     // CDN bersifat "best effort": kalau gagal, instalasi tetap lanjut
     await Promise.allSettled(CDN.map(async (u) => {
       const res = await fetch(u, { mode: 'cors' });

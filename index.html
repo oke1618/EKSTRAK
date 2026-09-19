@@ -2777,6 +2777,34 @@ function fakturHasMinus(fk){
   return !!(fk && _nfHasMinus && _nfHasMinus[fk]);
 }
 
+/* Klik No. Faktur di tab Transaksi -> tampilkan modal detail faktur (modal yang sama dengan tab Cek) */
+async function getFakturItems(fk, bulanHint){
+  const key = U(fk);
+  let arr = [];
+  try {
+    if (useIDB && db) {
+      // cari di bulan yang sama dulu (cepat, pakai index), lalu fallback ke semua data
+      if (bulanHint) arr = await db.tx.where('bulan').equals(bulanHint).filter(r => U(r.faktur) === key).toArray();
+      if (!arr.length) arr = await db.tx.filter(r => U(r.faktur) === key).toArray();
+    }
+  } catch(e){ console.warn('[Faktur] baca IndexedDB gagal:', e); }
+  if (!arr.length) arr = rows.filter(r => U(r.faktur) === key);
+  return arr;
+}
+async function openFakturDetail(fk, bulanHint){
+  fk = String(fk || '').trim();
+  if (!fk) return;
+  if (typeof CekApp === 'undefined' || !CekApp.openDetail) { alert('Modul detail faktur belum siap. Coba muat ulang halaman.'); return; }
+  try {
+    const items = await getFakturItems(fk, bulanHint);
+    await CekApp.openDetail(fk, items);
+  } catch(e){
+    console.error('[Faktur] gagal membuka detail:', e);
+    alert('Gagal membuka detail faktur ' + fk + '.');
+  }
+}
+window.openFakturDetail = openFakturDetail;
+
 function s0RowHTML(i){
   const r = filteredRows[i];
   const jumlah = N(r.jumlah), hargaBeli = N(r.hargaBeli), hargaJual = N(r.hargaJual),
@@ -2807,7 +2835,8 @@ function s0RowHTML(i){
       const actBtn = fakturVoided
         ? '<button type="button" class="btn-unvoid-one" onclick="voidFakturOne(\'' + safe + '\',false)" title="Aktifkan kembali seluruh faktur">↩ Aktifkan</button>'
         : '<button type="button" class="btn-void-one" onclick="voidFakturOne(\'' + safe + '\',true)" title="Tandai BATAL seluruh faktur">⛔ Batal</button>';
-      return '<td><span class="faktur-link" title="No. Faktur">' + fk + '</span>' + badges + actBtn + '</td>';
+      const safeBln = String(r.bulan || '').replace(/[^0-9A-Za-z_-]/g,'');
+      return '<td><span class="faktur-link" title="Klik untuk lihat detail faktur" role="button" tabindex="0" onclick="openFakturDetail(\'' + safe + '\',\'' + safeBln + '\')" onkeydown="if(event.key===\'Enter\')openFakturDetail(\'' + safe + '\',\'' + safeBln + '\')">' + fk + '</span>' + badges + actBtn + '</td>';
     }
     if (c.k === 'qty'){
       let qbadge = '';
@@ -4573,15 +4602,17 @@ const CekApp = (() => {
     if (m) m.style.display = 'none';
   }
 
-  function showDetail(fakturNo){
+  function showDetail(fakturNo, src){
+    const _penj = (src && src.penj) ? src.penj : penjRows;
+    const _um   = (src && src.um)   ? src.um   : umRows;
     const fk = String(fakturNo || '').trim();
     if (!fk) return;
     const fkUpper = fk.toUpperCase();
 
     // 1. Ambil baris item penjualan untuk faktur ini
-    const pItems = penjRows.filter(r => U(r.faktur) === fkUpper);
+    const pItems = _penj.filter(r => U(r.faktur) === fkUpper);
     // 2. Ambil baris pembayaran uang masuk untuk faktur ini (exact noFaktur)
-    let uItems = umRows.filter(d => U(d.noFaktur) === fkUpper);
+    let uItems = _um.filter(d => U(d.noFaktur) === fkUpper);
     let isSmartMatchedDetail = false;
     let smartMatchNote = '';
 
@@ -4596,7 +4627,7 @@ const CekApp = (() => {
       let candidate = null;
       let minDiff = Infinity;
 
-      for (const d of umRows) {
+      for (const d of _um) {
         const umTokoNorm = normStr(d.namaToko);
         const umSalesNorm = normStr(d.sales);
         const tokoMatch = (umTokoNorm && custNorm) &&
@@ -4830,7 +4861,14 @@ const CekApp = (() => {
     if (e.key === 'Escape') closeModal();
   });
 
-  return { refresh, sub, render, showDetail, closeModal };
+  // Dipanggil dari tab Transaksi: baca Uang Masuk terbaru lalu tampilkan modal
+  async function openDetail(fakturNo, penjItems){
+    let um = [];
+    try { um = await loadUM(); } catch(e){ console.warn('[Cek] baca Uang Masuk gagal:', e); }
+    showDetail(fakturNo, { penj: penjItems || [], um: um });
+  }
+
+  return { refresh, sub, render, showDetail, openDetail, closeModal };
 })();
 window.CekApp = CekApp;
 

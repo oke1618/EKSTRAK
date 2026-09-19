@@ -1,7 +1,7 @@
 /* Service Worker — Ekstrak Laporan
    Strategi: cache dulu (cepat & bisa offline), lalu diperbarui di latar belakang.
    Ubah CACHE_VERSION jika Anda menambah/mengganti file di daftar CORE. */
-const CACHE_VERSION = 'v2';
+const CACHE_VERSION = 'v4';
 const CACHE = 'ekstrak-laporan-' + CACHE_VERSION;
 
 const CORE = [
@@ -12,14 +12,13 @@ const CORE = [
   './icons/icon-512.png',
   './icons/icon-maskable-512.png',
   './icons/apple-touch-icon.png',
-  './icons/favicon-32.png'
+  './icons/favicon-32.png',
+  './libs/xlsx.full.min.js',
+  './libs/dexie.min.js'
 ];
 
-// Library dari CDN (dipakai halaman & Web Worker) — disimpan agar bisa offline
-const CDN = [
-  'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js',
-  'https://cdn.jsdelivr.net/npm/dexie@3.2.4/dist/dexie.min.js'
-];
+// Library kini dimuat dari ./libs/ (lokal). CDN hanya cadangan, disimpan otomatis saat pernah dipakai.
+const CDN = [];
 const CDN_HOSTS = ['cdn.jsdelivr.net'];
 
 self.addEventListener('install', (event) => {

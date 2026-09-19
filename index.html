@@ -16,8 +16,12 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Ekstrak Laporan">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/dexie@3.2.4/dist/dexie.min.js"></script>
+<!-- Library dimuat dari file lokal (libs/) lebih dulu; CDN hanya cadangan -->
+<script src="libs/xlsx.full.min.js"></script>
+<script>window.XLSX || document.write('<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"><\/script>');</script>
+<script src="libs/dexie.min.js"></script>
+<script>window.Dexie || document.write('<script src="https://cdn.jsdelivr.net/npm/dexie@3.2.4/dist/dexie.min.js"><\/script>');</script>
+<script>var XLSX_LOCAL_URL = new URL('libs/xlsx.full.min.js', document.baseURI).href;</script>
 <style>
 /* INLINE STYLES */
 /* ===== Shared shell ===== */
@@ -791,6 +795,25 @@ table.grid tfoot td{ padding:8px; border-top:1px solid var(--line-2); background
   font:700 11.5px Arial,sans-serif;cursor:pointer;white-space:nowrap;transition:.15s}
 #btnInstallPwa:hover{background:rgba(255,255,255,.28)}
 #btnInstallPwa[hidden]{display:none}
+/* Panel ubah jenis pembayaran (modal detail faktur) */
+.cek-m-paybox{display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px;padding:10px 12px;border:1px dashed #94a3b8;border-radius:8px;background:#f8fafc}
+.cek-m-paybox .pb-lbl{font-size:10px;font-weight:700;letter-spacing:.08em;color:#64748b;text-transform:uppercase}
+.cek-pay-chip{display:inline-block;padding:2px 10px;border-radius:999px;font-size:12px;font-weight:800;border:1px solid}
+.cek-pay-chip.cash{background:#dcfce7;color:#166534;border-color:#86efac}
+.cek-pay-chip.tempo{background:#fef3c7;color:#92400e;border-color:#fcd34d}
+.cek-pay-chip.mix{background:#e0e7ff;color:#3730a3;border-color:#a5b4fc}
+.cek-pay-manual{font-size:10.5px;color:#7c3aed;font-weight:700;margin-left:8px}
+.cek-pay-btn{border:1px solid transparent;border-radius:7px;padding:6px 12px;font:700 12px Arial,sans-serif;cursor:pointer;color:#fff;transition:.15s}
+.cek-pay-btn.tempo{background:#d97706;border-color:#b45309}
+.cek-pay-btn.tempo:hover{background:#b45309}
+.cek-pay-btn.cash{background:#16a34a;border-color:#15803d}
+.cek-pay-btn.cash:hover{background:#15803d}
+.cek-pay-btn:disabled{opacity:.55;cursor:wait}
+.cek-m-paybox-hint{flex-basis:100%;font-size:11px;color:#64748b;line-height:1.5}
+.cek-m-notice{padding:9px 12px;border-radius:8px;background:#ecfdf5;border:1px solid #6ee7b7;color:#065f46;font-size:12.5px;line-height:1.5}
+#persist-warning{background:#fef2f2;border-bottom:2px solid #dc2626;color:#7f1d1d;padding:9px 14px;font-size:12.5px;line-height:1.5}
+#persist-warning .pw-why{display:inline-block;margin-left:4px;font-family:Consolas,monospace;font-size:11.5px;background:#fee2e2;padding:1px 6px;border-radius:4px}
+#persist-warning .pw-tip{margin-top:3px;color:#991b1b}
 </style>
 </head>
 <body>
@@ -939,6 +962,7 @@ table.grid tfoot td{ padding:8px; border-top:1px solid var(--line-2); background
 
 <!-- ===================== PANEL REKAP PENJUALAN ===================== -->
 <div id="app-penj" class="app-panel active">
+  <div id="persist-warning" style="display:none"></div>
   <main class="wrap">
     <div id="summary" style="display:none">
       <div class="kpis">
@@ -1706,22 +1730,87 @@ const IDB_SUPPORTED = (() => {
   try { return typeof indexedDB !== 'undefined' && typeof Dexie !== 'undefined'; } catch(e){ return false; }
 })();
 let db = null, useIDB = false;
-async function initDB(){
-  if (!IDB_SUPPORTED) return;
+const PENJ_DB_NAME = 'rekapPenjualan_v1';
+const PENJ_STORES = { tx: '++id,bulan,sales,pembayaran,_ts,produk', meta: '&key' };
+window.__idbError = '';
+function idbErrText(e){ return e ? ((e.name ? e.name + ': ' : '') + (e.message || String(e))) : ''; }
+
+// Apakah database yang sudah ada punya bentuk yang cocok dengan yang dipakai aplikasi?
+function penjSchemaOk(d){
   try {
-    db = new Dexie('rekapPenjualan_v1');
-    db.version(1).stores({ tx: '++id,bulan,sales,pembayaran,_ts,produk', meta: '&key' });
+    const tx = d.table('tx'), meta = d.table('meta');
+    const idx = (tx.schema && tx.schema.idxByName) || {};
+    const pk = tx.schema.primKey || {};
+    return pk.keyPath === 'id' && !!pk.auto && ['bulan','_ts','produk'].every(k => !!idx[k]) &&
+           !!meta && (meta.schema.primKey || {}).keyPath === 'key';
+  } catch(e){ return false; }
+}
+
+async function initDB(){
+  window.__idbError = '';
+  if (!IDB_SUPPORTED) {
+    window.__idbError = (typeof indexedDB === 'undefined') ? 'Browser ini tidak mendukung IndexedDB (mode privat/diblokir?).'
+                                                            : 'Library penyimpanan (Dexie) gagal dimuat.';
+    return;
+  }
+  // 1) Cara normal
+  try {
+    db = new Dexie(PENJ_DB_NAME);
+    db.version(1).stores(PENJ_STORES);
     await db.open();
     useIDB = true;
-  } catch(e){
-    console.warn('IndexedDB unavailable; falling back to in-memory mode.', e);
+    return;
+  } catch(e1){
+    console.warn('[DB] Buka database standar gagal:', e1);
+    window.__idbError = idbErrText(e1);
+    try { db && db.close(); } catch(_){}
+    db = null;
+  }
+  // 2) Database dengan nama sama sudah ada tapi versi/skema berbeda (mis. dibuat aplikasi lain di alamat yang sama)
+  //    -> buka apa adanya, dan pakai jika tabel & index-nya cocok. Data lama TIDAK diubah.
+  try {
+    const d2 = new Dexie(PENJ_DB_NAME);
+    await d2.open();
+    if (penjSchemaOk(d2)) {
+      if (!d2.tx)   d2.tx   = d2.table('tx');
+      if (!d2.meta) d2.meta = d2.table('meta');
+      db = d2; useIDB = true;
+      console.info('[DB] Memakai database yang sudah ada (versi/skema berbeda tapi kompatibel).');
+      return;
+    }
+    d2.close();
+  } catch(e2){ console.warn('[DB] Buka database apa adanya gagal:', e2); }
+  // 3) Skema tidak cocok -> pakai database baru bernama lain (database lama dibiarkan utuh)
+  try {
+    const d3 = new Dexie(PENJ_DB_NAME + '_pwa');
+    d3.version(1).stores(PENJ_STORES);
+    await d3.open();
+    db = d3; useIDB = true;
+    console.info('[DB] Memakai database cadangan: ' + PENJ_DB_NAME + '_pwa');
+    return;
+  } catch(e3){
+    console.warn('[DB] Database cadangan gagal:', e3);
+    window.__idbError = idbErrText(e3) || window.__idbError;
+    try { db && db.close(); } catch(_){}
     db = null; useIDB = false;
   }
 }
 
+/* Banner peringatan bila data TIDAK tersimpan permanen */
+function updatePersistBanner(){
+  const el = document.getElementById('persist-warning');
+  if (!el) return;
+  if (useIDB) { el.style.display = 'none'; el.innerHTML = ''; return; }
+  const why = String(window.__idbError || 'tidak diketahui').replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
+  el.innerHTML = '<b>⚠️ Penyimpanan permanen TIDAK aktif.</b> Data yang diunggah hanya tersimpan sementara dan akan <b>HILANG</b> jika halaman di-refresh atau ditutup.' +
+    ' <span class="pw-why">Penyebab: ' + why + '</span>' +
+    '<div class="pw-tip">Sementara itu, gunakan <b>Menu → Backup → Unduh File Backup</b> agar data bisa dipulihkan.</div>';
+  el.style.display = 'block';
+}
+
 /* ------------- Web Worker ------------- */
 const WORKER_SRC = `
-self.importScripts('https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js');
+try { self.importScripts('${XLSX_LOCAL_URL}'); } catch(_e) { self.importScripts('https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js'); }
 self.onmessage = function(e){
   try {
     const buf = e.data;
@@ -1906,14 +1995,19 @@ async function fallbackParse(buf){
       return o;
     }).filter(Boolean);
 
+    await applyPayOverrides(out); // terapkan koreksi CASH/TEMPO manual
+
     // Bersihkan HANYA bulan yang ada di file yang baru diunggah (bukan menghapus bulan lain!)
     const uploadedMonths = [...months];
     if (useIDB){
       try {
-        for (const bln of uploadedMonths) {
-          await db.tx.where('bulan').equals(bln).delete();
-        }
-        await db.tx.bulkPut(out);
+        // hapus bulan lama + simpan data baru dalam satu transaksi: bila gagal, data lama tetap aman
+        await db.transaction('rw', db.tx, async () => {
+          for (const bln of uploadedMonths) {
+            await db.tx.where('bulan').equals(bln).delete();
+          }
+          await db.tx.bulkPut(out);
+        });
 
         // Gabungkan daftar produk, sales, dan bulan
         const oldM = (await db.meta.get('months'))?.value || [];
@@ -1925,7 +2019,7 @@ async function fallbackParse(buf){
         await db.meta.put({key:'products', value:combP});
         await db.meta.put({key:'sales',    value:combS});
         await db.meta.put({key:'months',   value:combM});
-      } catch(e){ console.warn('fallback bulkPut gagal, beralih ke mode in-memori', e); useIDB = false; }
+      } catch(e){ console.warn('fallback bulkPut gagal, beralih ke mode in-memori', e); window.__idbError = 'Gagal menyimpan: ' + idbErrText(e); useIDB = false; }
     }
     if (!useIDB) {
       // Hapus hanya bulan yang diunggah
@@ -1976,6 +2070,7 @@ async function onWorkerMsg(e){
     _inFlightWorker = false;
     const allParsedRows = _stagedChunks.flat();
     _stagedChunks = [];
+    await applyPayOverrides(allParsedRows); // terapkan koreksi CASH/TEMPO manual
 
     // Deteksi bulan yang ada di file yang baru diunggah
     const uploadedMonths = [...new Set(allParsedRows.map(r => r.bulan).filter(Boolean))];
@@ -1984,11 +2079,13 @@ async function onWorkerMsg(e){
     if (useIDB){
       try {
         // Hapus HANYA data bulan yang sama dengan file baru (mengganti revisi bulan tersebut, TANPA menghapus bulan lain!)
-        for (const bln of uploadedMonths) {
-          await db.tx.where('bulan').equals(bln).delete();
-        }
-        // Simpan baris data baru
-        await db.tx.bulkPut(allParsedRows);
+        await db.transaction('rw', db.tx, async () => {
+          for (const bln of uploadedMonths) {
+            await db.tx.where('bulan').equals(bln).delete();
+          }
+          // Simpan baris data baru
+          await db.tx.bulkPut(allParsedRows);
+        });
 
         // Gabungkan metadata bulan, sales, produk dengan data bulan lain yang sudah ada sebelumnya di DB
         const oldM = (await db.meta.get('months'))?.value || [];
@@ -2005,6 +2102,10 @@ async function onWorkerMsg(e){
         m.products = combP; m.sales = combS; m.months = combM;
       } catch(err){
         console.warn('Simpan data ke IndexedDB gagal:', err);
+        // jangan diam-diam: tampilkan datanya (sementara) dan beri peringatan jelas
+        window.__idbError = 'Gagal menyimpan: ' + idbErrText(err);
+        useIDB = false;
+        rows = rows.filter(r => !uploadedMonths.includes(r.bulan)).concat(allParsedRows);
       }
     } else {
       rows = rows.filter(r => !uploadedMonths.includes(r.bulan)).concat(allParsedRows);
@@ -2034,9 +2135,15 @@ async function postParseDone(){
   populateFiltersDOM().catch(()=>{});
   if (typeof buildColPicker === 'function') buildColPicker();
   show('s0', document.querySelector('.tabs button[data-view]'));
-  setStatus('Berhasil diproses: ' + _parseFileName + ' (' + totalRows.toLocaleString('id-ID') + ' baris) — tersimpan di IndexedDB' + (useIDB ? '' : ', fallback in-memori'));
+  setStatus('Berhasil diproses: ' + _parseFileName + ' (' + totalRows.toLocaleString('id-ID') + ' baris) — ' +
+    (useIDB ? '✅ tersimpan permanen (IndexedDB)' : '⚠️ HANYA SEMENTARA (memori) — akan HILANG saat refresh!'));
   closeDd();
   hideBusy();
+  updatePersistBanner();
+  if (!useIDB && !window.__warnedNoPersist) {
+    window.__warnedNoPersist = true;
+    setTimeout(() => alert('PERINGATAN: data BELUM tersimpan permanen di browser ini, sehingga akan hilang jika halaman di-refresh.\n\nPenyebab: ' + (window.__idbError || 'tidak diketahui') + '\n\nGunakan Menu → Backup → Unduh File Backup untuk menyimpan salinan.'), 50);
+  }
 }
 
 function materialise(){
@@ -2473,7 +2580,7 @@ async function exportPenjualanBackup(){
     let txRows = [], meta = {};
     if (useIDB && db) {
       txRows = await db.tx.toArray();
-      const keys = ['months','sales','products','voided'];
+      const keys = ['months','sales','products','voided','payOverrides'];
       for (const k of keys) {
         try { const m = await db.meta.get(k); if (m) meta[k] = m.value; } catch(e){}
       }
@@ -2528,6 +2635,7 @@ async function importPenjualanBackup(ev){
           try { await db.meta.put({key:k, value:o.meta[k]}); } catch(e){}
         }
       }
+      resetPayOverridesCache();
     } else {
       rows = o.tx.slice();
     }
@@ -2777,6 +2885,78 @@ function fakturHasMinus(fk){
   return !!(fk && _nfHasMinus && _nfHasMinus[fk]);
 }
 
+/* ===== Koreksi Jenis Pembayaran per Faktur (CASH <-> TEMPO) =====
+   Disimpan sebagai "override" di IndexedDB (meta.payOverrides) supaya tetap berlaku
+   walaupun file Excel bulan yang sama diunggah ulang. Ikut ter-backup. */
+let _payOverrides = null;
+async function ensurePayOverrides(){
+  if (_payOverrides) return _payOverrides;
+  let m = {};
+  try {
+    if (useIDB && db) {
+      const r = await db.meta.get('payOverrides');
+      if (r && r.value && typeof r.value === 'object') m = r.value;
+    }
+  } catch(e){ console.warn('[PayOverride] gagal baca:', e); }
+  _payOverrides = m; window.__payOverrides = m;
+  return m;
+}
+async function savePayOverrides(){
+  try { if (useIDB && db) await db.meta.put({key:'payOverrides', value:(_payOverrides || {})}); }
+  catch(e){ console.warn('[PayOverride] gagal simpan:', e); }
+  window.__payOverrides = _payOverrides || {};
+}
+function resetPayOverridesCache(){ _payOverrides = null; window.__payOverrides = null; }
+async function applyPayOverrides(arr){
+  const m = await ensurePayOverrides();
+  if (!arr || !arr.length || !Object.keys(m).length) return 0;
+  let n = 0;
+  for (const r of arr){
+    const v = m[U(r.faktur)];
+    if (v && U(r.pembayaran) !== v){ r.pembayaran = v; n++; }
+  }
+  if (n) console.log('[PayOverride] ' + n + ' baris disesuaikan dengan koreksi manual.');
+  return n;
+}
+
+/* Ubah jenis pembayaran SELURUH baris sebuah faktur, lalu segarkan Transaksi + Cek */
+async function setFakturPembayaran(fk, newPay, bulanHint){
+  const key = U(fk); newPay = U(newPay);
+  if (!key) throw new Error('No. faktur kosong.');
+  if (newPay !== 'CASH' && newPay !== 'TEMPO') throw new Error('Jenis pembayaran harus CASH atau TEMPO.');
+  const items = await getFakturItems(fk, bulanHint);
+  if (!items.length) throw new Error('Faktur ' + fk + ' tidak ditemukan di data penjualan.');
+  const todo = items.filter(r => U(r.pembayaran) !== newPay);
+
+  if (useIDB && db) {
+    const withId = todo.filter(r => r.id != null);
+    await db.transaction('rw', db.tx, async () => {
+      for (const r of withId) await db.tx.update(r.id, { pembayaran: newPay });
+    });
+  }
+  // data in-memori (mode tanpa IndexedDB, atau cadangan)
+  rows.forEach(r => { if (U(r.faktur) === key) r.pembayaran = newPay; });
+
+  // simpan sebagai koreksi permanen
+  const m = await ensurePayOverrides();
+  m[key] = newPay;
+  await savePayOverrides();
+
+  // segarkan tabel Transaksi (pertahankan posisi scroll) + tab Cek
+  try {
+    const box0 = document.getElementById('s0box');
+    const saved = box0 ? (box0.scrollTop || 0) : 0;
+    await refreshAfterDataChange();
+    const box1 = document.getElementById('s0box');
+    if (box1) { box1.scrollTop = saved; try { s0Render(); } catch(_){} }
+  } catch(e){ console.warn('[Faktur] refresh Transaksi gagal:', e); }
+  try { if (window.CekApp) await CekApp.refresh(); } catch(e){ console.warn('[Faktur] refresh Cek gagal:', e); }
+
+  setStatus('Faktur ' + fk + ' diubah ke ' + newPay + ' (' + todo.length + ' baris).');
+  return todo.length;
+}
+window.setFakturPembayaran = setFakturPembayaran;
+
 /* Klik No. Faktur di tab Transaksi -> tampilkan modal detail faktur (modal yang sama dengan tab Cek) */
 async function getFakturItems(fk, bulanHint){
   const key = U(fk);
@@ -2791,13 +2971,14 @@ async function getFakturItems(fk, bulanHint){
   if (!arr.length) arr = rows.filter(r => U(r.faktur) === key);
   return arr;
 }
-async function openFakturDetail(fk, bulanHint){
+async function openFakturDetail(fk, bulanHint, notice){
   fk = String(fk || '').trim();
   if (!fk) return;
   if (typeof CekApp === 'undefined' || !CekApp.openDetail) { alert('Modul detail faktur belum siap. Coba muat ulang halaman.'); return; }
   try {
     const items = await getFakturItems(fk, bulanHint);
-    await CekApp.openDetail(fk, items);
+    await ensurePayOverrides();
+    await CekApp.openDetail(fk, items, notice);
   } catch(e){
     console.error('[Faktur] gagal membuka detail:', e);
     alert('Gagal membuka detail faktur ' + fk + '.');
@@ -2914,6 +3095,7 @@ function saveExcel(){
 
 async function restoreFromDB(){
   if (!useIDB) return;
+  try { await ensurePayOverrides(); } catch(e){}
   try {
     const total = await db.tx.count();
     if (!total) return;
@@ -2968,7 +3150,9 @@ window.refreshAfterDataChange = refreshAfterDataChange;
 
 (async function init(){
   await initDB();
+  try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch(e){}
   await restoreFromDB();
+  updatePersistBanner();
 })();
 
 </script>
@@ -3256,7 +3440,7 @@ async function konfirmasiHapus(){
 }
 
 const UM_WORKER_SRC = `
-self.importScripts('https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js');
+try { self.importScripts('${XLSX_LOCAL_URL}'); } catch(_e) { self.importScripts('https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js'); }
 const HARI_REGEX = /^(SENIN|SELASA|RABU|KAMIS|JUMAT|SABTU|AHAD|MINGGU)[,\\s]+(\\d{2}[\\/\\-]\\d{2}[\\/\\-]\\d{4})/i;
 function bersih(val){
   return (val === null || val === undefined) ? '' : String(val).trim();
@@ -4178,15 +4362,13 @@ const CekApp = (() => {
   let listBelum = [], listOrphan = [];
 
   async function loadPenj(){
-    if (typeof Dexie !== 'undefined'){
-      try {
-        const dbp = new Dexie('rekapPenjualan_v1');
-        dbp.version(1).stores({ tx: '++id,bulan,sales,pembayaran,_ts,produk', meta: '&key' });
-        await dbp.open();
-        const arr = await dbp.tx.toArray();
+    try {
+      // pakai koneksi database yang sama dengan tab Rekap Penjualan
+      if (typeof useIDB !== 'undefined' && useIDB && typeof db !== 'undefined' && db) {
+        const arr = await db.tx.toArray();
         if (arr && arr.length) return arr;
-      } catch(e){ console.warn('[Cek] baca Dexie penjualan gagal:', e); }
-    }
+      }
+    } catch(e){ console.warn('[Cek] baca database penjualan gagal:', e); }
     try { if (typeof rows !== 'undefined' && rows.length) return rows.slice(); } catch(e){}
     return [];
   }
@@ -4603,6 +4785,7 @@ const CekApp = (() => {
   }
 
   function showDetail(fakturNo, src){
+    const _notice = (src && src.notice) ? String(src.notice) : '';
     const _penj = (src && src.penj) ? src.penj : penjRows;
     const _um   = (src && src.um)   ? src.um   : umRows;
     const fk = String(fakturNo || '').trim();
@@ -4674,6 +4857,26 @@ const CekApp = (() => {
     const alamatVal = firstP.alamat || firstU.alamat || '-';
     const tglFaktur = firstP.tanggal ? fmtTglC(firstP.tanggal) : (firstU.tanggalLaporan || '-');
     const jenisBayar = firstP.pembayaran || '-';
+
+    // ---- Panel aksi: ubah jenis pembayaran (CASH <-> TEMPO) ----
+    const paySet = [...new Set(pItems.map(r => U(r.pembayaran)).filter(Boolean))];
+    const payLabel = paySet.length ? paySet.join(' + ') : '-';
+    const payChipCls = paySet.length > 1 ? 'mix' : (paySet[0] === 'TEMPO' ? 'tempo' : 'cash');
+    const payOvr = (window.__payOverrides || {})[fkUpper];
+    const payManual = !!(payOvr && paySet.length === 1 && paySet[0] === payOvr);
+    const payTargets = ['CASH', 'TEMPO'].filter(t => !(paySet.length === 1 && paySet[0] === t));
+    const payPanelHtml = pItems.length ? `
+      <div class="cek-m-paybox">
+        <div>
+          <div class="pb-lbl">Jenis Pembayaran Faktur</div>
+          <div style="margin-top:3px"><span class="cek-pay-chip ${payChipCls}">${esc(paySet.length > 1 ? payLabel + ' (campuran)' : payLabel)}</span>${payManual ? '<span class="cek-pay-manual" title="Sudah dikoreksi manual; tetap berlaku walau Excel diunggah ulang">✎ koreksi manual</span>' : ''}</div>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-left:auto">
+          ${payTargets.map(t => `<button type="button" class="cek-pay-btn ${t.toLowerCase()}" data-setpay="${t}">🔄 Ubah ke ${t}</button>`).join('')}
+        </div>
+        <div class="cek-m-paybox-hint">Setelah dicek manual ternyata jenis pembayarannya keliru? Ubah di sini — data Penjualan (Transaksi, Profit Per Pembayaran, Cek) ikut berpindah otomatis dan tetap berlaku walau file Excel bulan ini diunggah ulang.</div>
+      </div>` : '';
+    const noticeHtml = _notice ? `<div class="cek-m-notice">✅ ${esc(_notice)}</div>` : '';
 
     let statusBoxHtml = '';
     if (pItems.length > 0 && uItems.length === 0) {
@@ -4824,6 +5027,7 @@ const CekApp = (() => {
     }
 
     mBody.innerHTML = `
+      ${noticeHtml}
       ${statusBoxHtml}
 
       <div class="cek-m-grid">
@@ -4849,9 +5053,14 @@ const CekApp = (() => {
         </div>
       </div>
 
+      ${payPanelHtml}
       ${pTableHtml}
       ${uTableHtml}
     `;
+
+    mBody.querySelectorAll('[data-setpay]').forEach(btn => {
+      btn.addEventListener('click', () => changePay(fk, btn.dataset.setpay, payLabel, pItems.length, totalPenj, firstP.bulan || '', btn));
+    });
 
     m.style.display = 'flex';
   }
@@ -4862,10 +5071,34 @@ const CekApp = (() => {
   });
 
   // Dipanggil dari tab Transaksi: baca Uang Masuk terbaru lalu tampilkan modal
-  async function openDetail(fakturNo, penjItems){
+  async function openDetail(fakturNo, penjItems, notice){
     let um = [];
     try { um = await loadUM(); } catch(e){ console.warn('[Cek] baca Uang Masuk gagal:', e); }
-    showDetail(fakturNo, { penj: penjItems || [], um: um });
+    showDetail(fakturNo, { penj: penjItems || [], um: um, notice: notice || '' });
+  }
+
+  // Aksi di modal: ubah jenis pembayaran faktur (CASH <-> TEMPO)
+  async function changePay(fk, newPay, curLabel, nItems, total, bulan, btn){
+    if (typeof window.setFakturPembayaran !== 'function') { alert('Fitur ubah pembayaran belum siap. Muat ulang halaman.'); return; }
+    const msg = 'Ubah jenis pembayaran faktur ' + fk + '?\n\n' +
+      'Dari    : ' + curLabel + '\nMenjadi : ' + newPay + '\n' +
+      'Jumlah item : ' + nItems + '\nTotal faktur: ' + rpC(total) + '\n\n' +
+      'Data Penjualan (Transaksi, Profit Per Pembayaran, Cek) akan ikut berubah otomatis.';
+    if (!confirm(msg)) return;
+    const box = btn && btn.closest('.cek-m-paybox');
+    if (box) box.querySelectorAll('button').forEach(b => { b.disabled = true; });
+    if (btn) btn.textContent = 'Menyimpan...';
+    try {
+      const n = await window.setFakturPembayaran(fk, newPay, bulan);
+      const note = 'Jenis pembayaran faktur ' + fk + ' diubah dari ' + curLabel + ' menjadi ' + newPay + ' (' + n + ' baris). ' +
+        'Faktur ini sekarang masuk kelompok ' + newPay + ' di Transaksi & Cek. Koreksi tersimpan dan tetap berlaku jika Excel bulan ini diunggah ulang.';
+      await window.openFakturDetail(fk, bulan, note);
+    } catch(e){
+      console.error('[Cek] ubah pembayaran gagal:', e);
+      alert('Gagal mengubah jenis pembayaran: ' + (e && e.message ? e.message : e));
+      if (box) box.querySelectorAll('button').forEach(b => { b.disabled = false; });
+      if (btn) btn.textContent = '🔄 Ubah ke ' + newPay;
+    }
   }
 
   return { refresh, sub, render, showDetail, openDetail, closeModal };
